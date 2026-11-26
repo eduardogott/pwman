@@ -51,7 +51,9 @@ a = Analysis(  # noqa: F821
     noarchive=False,
 )
 # The UI is English-only and installs no QTranslator, so Qt's own translations are unused.
-a.datas = [d for d in a.datas if not d[0].replace("\\", "/").startswith("PySide6/Qt/translations")]
+# (Linux wheels keep them in PySide6/Qt/translations, Windows wheels in PySide6/translations.)
+a.datas = [d for d in a.datas
+           if not d[0].replace("\\", "/").startswith(("PySide6/Qt/translations/", "PySide6/translations/"))]
 
 pyz = PYZ(a.pure)  # noqa: F821
 exe = EXE(  # noqa: F821
