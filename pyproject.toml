@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pwman"
+dynamic = ["version"]
+description = "Offline password manager with built-in 2FA codes, password health ratings and a generator"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6-Essentials>=6.6",
+    "cryptography>=42",
+    "argon2-cffi>=23.1",
+    "zxcvbn>=4.4.28",
+    "zxing-cpp>=2.2",
+]
+
+[project.gui-scripts]
+pwman = "pwman.app:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "pwman.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"pwman.assets" = ["*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,108 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Qt system libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pyflakes src tests
+      - run: python -m pytest -q
+
+  windows-installer:
+    name: Windows installer
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Build app (PyInstaller)
+        run: python -m PyInstaller --noconfirm --clean packaging/pwman.spec
+
+      - name: Self-test the built app
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\PwMan\PwMan.exe" -ArgumentList "--self-test", "$env:RUNNER_TEMP\selftest.txt" -Wait -PassThru
+          Get-Content "$env:RUNNER_TEMP\selftest.txt"
+          if ($p.ExitCode -ne 0) { throw "self-test failed" }
+
+      - name: Build installer (Inno Setup)
+        id: installer
+        shell: pwsh
+        run: |
+          $version = python -c "import sys; sys.path.insert(0, 'src'); import pwman; print(pwman.__version__)"
+          $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y | Out-Null
+            $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1 -ExpandProperty FullName
+          }
+          & $iscc "/DMyAppVersion=$version" packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Get-ChildItem dist\*.exe | ForEach-Object { "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB) }
+
+      - name: Test install, run and uninstall
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist\PwMan-Setup-*.exe | Select-Object -First 1
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/CURRENTUSER", "/NORESTART" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited with $($p.ExitCode)" }
+          $exe = "$env:LOCALAPPDATA\Programs\PwMan\PwMan.exe"
+          if (-not (Test-Path $exe)) { throw "PwMan.exe not installed at $exe" }
+          $p = Start-Process -FilePath $exe -ArgumentList "--self-test", "$env:RUNNER_TEMP\installed.txt" -Wait -PassThru
+          Get-Content "$env:RUNNER_TEMP\installed.txt"
+          if ($p.ExitCode -ne 0) { throw "installed app self-test failed" }
+          $p = Start-Process -FilePath "$env:LOCALAPPDATA\Programs\PwMan\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstaller exited with $($p.ExitCode)" }
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: PwMan-Setup-${{ steps.installer.outputs.version }}
+          path: dist/PwMan-Setup-*.exe
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows-installer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/PwMan-Setup-*.exe
+          generate_release_notes: true
